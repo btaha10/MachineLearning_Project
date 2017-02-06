@@ -1,0 +1,190 @@
+---
+title: "Machine Learning Project on Dumbell Usage"
+author: "Bassem Taha"
+date: "February 5, 2017"
+output: html_document
+---
+
+#### Overview
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts in 5 different ways as follow:
+
+* correct performance per specification (Class A)
+* throwing the elbows to the front (Class B)
+* lifting the dumbbell only halfway (Class C)
+* lowering the dumbbell only halfway (Class D)
+* throwing the hips to the front (Class E). 
+
+The goal of this project is to predict the manner in which the 6 participants did the exercise.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Libraries
+```{r loadlibraries, message=FALSE, warning=FALSE}
+# Libraries
+library(knitr)
+library(caret)
+library(rpart)
+library(plyr)
+library(dplyr)
+library(gbm)
+library(rattle)
+library(randomForest)
+```
+
+#### Data Processing
+Load the following training & testing datasets:
+
+[pml-testing] (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+[pml-training] (https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+```{r dataProcessing}
+download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+# read datasets
+training <- read.csv("pml-training.csv", na.strings = c("NA", ""))
+testing <- read.csv("pml-testing.csv", na.strings = c("NA", ""))
+```
+
+##### Datasets exploration and Cleaning
+Data from the training dataset indicate that 100 columns have "NA" & spaces and columns 1:7 (i.e timestamp, date) have no bearing on the computation. Hence all these will be removed.
+
+```{r cleaningDatasets}
+# First 7 irrelevant columns to be removed
+head(training[,1:7],1)
+trainingDat <- training[, 8:length(names(training))]
+testingDat <- testing[, 8:length(names(testing))]
+
+# 100 columns have NA & spaces
+length(which(colSums(is.na(trainingDat))!=0)); which(colSums(is.na(trainingDat))!=0)
+
+# Clean dataset by removing all columns with NA & spaces
+trainingDat <- trainingDat[, colSums(is.na(trainingDat)) == 0]
+testingDat <- testingDat[, colSums(is.na(testingDat)) == 0]
+
+```
+
+#### Subset training dataset into training & validation
+
+Will subset the training dataset into 2 subsets, 75% of which is used for training the data and the remaining 25% for validating the data.
+
+```{r partitionTrain}
+set.seed(020317) 
+inTrain <- createDataPartition(trainingDat$classe, p = 0.75, list = FALSE)
+trainingDat <- trainingDat[inTrain, ]
+validatingDat <- trainingDat[-inTrain, ]
+
+```
+
+The dimension of the training & validating datasets are 14718 x 53 and 3681 x 53 respectively:
+```{r reportDimensions}
+dim(trainingDat); dim(validatingDat)
+```
+
+#### Model Training
+
+We need to scale down the number of descriptors used for the model for simplicity and performance improvement yet still maintaining a minimum pof 95% covergae on variance. A few modeling techniques including decision tree, generalized boosting, k-nearest neighbor and Random Forest will be utilized to determine the best algorithm to use.
+
+We will set k=5 for the trainControl function instead of the default setting of 10 to reduce the computing runtime. This function, used by the model fitting algorithm, set's 5-fold cross validation technique.
+
+```{r modelGeneration}
+control.parms <- trainControl(method="cv", number=5)
+```
+
+Principal component analysis (PCA) is run to identify correlated descriptors
+
+```{r runPCA}
+preProc <- preProcess(trainingDat[,-53],method="pca",thresh = 0.95)
+preProc
+```
+
+PCA shows that 26 components are needed to capture 95% of the variance. That is a 50% reduction from the original number of 52 descriptors, and which will use to build the model.
+
+```{r createPredictedModel}
+# Creating 4 models from 26 descriptors and classe outcome
+# Fitting training dataset with a decision tree model
+predictedM <- predict(preProc, trainingDat)
+dim(predictedM)
+
+time_st <- proc.time()
+model_rpart <- train(classe ~ ., data=predictedM, method="rpart", trControl=control.parms)
+# time to build rpart
+(time_rpart <- proc.time() - time_st); time_st <- proc.time()
+
+# Fitting training dataset with a generalized boosting model
+model_gbm <- train(classe ~ ., data=predictedM, method="gbm", trControl=control.parms)
+(time_gbm <- proc.time() - time_st); time_st <- proc.time()
+
+# Fitting training dataset with a K-nearest model
+model_knn <- train(classe ~ ., data=predictedM, method="knn", trControl=control.parms)
+(time_knn <- proc.time() - time_st); time_st <- proc.time()
+
+# Fitting training dataset with a Random Forest model
+model_rf <- train(classe ~ ., data=predictedM, method="rf", trControl=control.parms)
+(time_rf <- proc.time() - time_st)
+
+# Random Forest has the maximum time to build the model
+(max(c(time_rf[[1]], time_knn[[1]], time_gbm[[1]], time_rpart[[1]])))
+```
+
+#### Cross Validation
+
+```{r Crossvalidation}
+print(model_rpart, digits = 3)
+conf_rpart <- confusionMatrix(validatingDat$classe,predict(model_rpart,predict(preProc,validatingDat[,-53])))
+# Accuracy; 
+conf_rpart$overall[1]
+# Error rate; 
+1-conf_rpart$overall[1]
+
+print(model_gbm, digits = 3)
+conf_gbm <- confusionMatrix(validatingDat$classe,predict(model_gbm,predict(preProc,validatingDat[,-53])))
+# Accuracy; 
+conf_gbm$overall[1]
+# Error rate; 
+1-conf_gbm$overall[1]
+
+print(model_knn, digits = 3)
+conf_knn <- confusionMatrix(validatingDat$classe,predict(model_knn,predict(preProc,validatingDat[,-53])))
+# Accuracy; 
+conf_knn$overall[1]
+# Error rate; 
+1-conf_knn$overall[1]
+
+print(model_rf, digits = 3)
+conf_rf <- confusionMatrix(validatingDat$classe,predict(model_rf,predict(preProc,validatingDat[,-53])))
+# Accuracy; 
+conf_rf$overall[1]
+# Error rate; 
+1-conf_rf$overall[1]
+
+# Maximum accuracy across models goes to Random Forest
+max(c(conf_rpart$overall[1], conf_gbm$overall[1], conf_knn$overall[1], conf_rf$overall[1]))
+
+conf_rf
+
+```
+
+Random forest method shows much better results compared to the other algorithms. We build the models using 26 predictors compared to a 2 fold performance degradation if we were to build it with all 52 variables. All the prediction outcomes fall on the diagonal in the table with a 100% accuracy rate and no out-of-sample error.  
+
+#### Final Testing
+
+We will predict the outcome by running the Random Forest model on the testing dataset. 
+
+```{r modeltesting}
+(conclusion <- predict(model_rf,predict(preProc,testingDat[,-53])))
+
+```
+
+#### Conclusion
+
+We can predict the way people are performing the excercise with a very high degree of accuracy using the Random forest model. Random Forest model build took more compute time than the others but it is a secondary order effect compared to the accuracy obtained.
+
+#### Appendix
+
+```{r plotSamples}
+fancyRpartPlot(model_rpart$finalModel)
+
+```
